@@ -51,14 +51,14 @@ export const LoginScreen = ({ navigation }: any) => {
     >
       <ScrollView contentContainerStyle={styles.scrollContainer}>
         {/* REQUISITO: Imagen local renderizada correctamente */}
-        <Image 
-          source={require('../../assets/icon.png')} 
-          style={styles.logo} 
-          resizeMode="contain"
+        <Image
+          source={require('../../assets/inmobiliaria-granada-granatte-71.jpg')}
+          style={styles.headerImage}
+          resizeMode="cover"
         />
 
-        <Text style={styles.title}>Rentas Premium</Text>
-        <Text style={styles.subtitle}>Encuentra tu hogar ideal</Text>
+        <Text style={styles.title}>Bienvenido a Rentas de Honduras</Text>
+        <Text style={styles.subtitle}>¡Tu siguiente hogar puede estar aquí!</Text>
 
         {/* Formulario con validaciones en tiempo de ejecución */}
         <CustomInput
@@ -90,13 +90,15 @@ const styles = StyleSheet.create({
   },
   scrollContainer: {
     flexGrow: 1,
-    justifyContent: 'center', 
+    justifyContent: 'flex-start',
     alignItems: 'center',     
     paddingHorizontal: 25,
+    paddingTop: 20,
   },
-  logo: {
-    width: 150,
-    height: 150,
+  headerImage: {
+    width: '100%',
+    height: 240,
+    borderRadius: 20,
     marginBottom: 20,
   },
   title: {
