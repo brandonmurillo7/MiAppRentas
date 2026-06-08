@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, Image, Text, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, StyleSheet, Image, Text, KeyboardAvoidingView, Platform, ScrollView, TouchableOpacity } from 'react-native';
 import { CustomInput } from '../components/CustomInput';
 import { CustomButton } from '../components/CustomButton';
 
@@ -9,6 +9,7 @@ export const LoginScreen = ({ navigation }: any) => {
   
   const [emailError, setEmailError] = useState('');
   const [passwordError, setPasswordError] = useState('');
+  const [role, setRole] = useState<'member' | 'seller'>('member');
 
   const validarFormulario = () => {
     let esValido = true;
@@ -40,7 +41,7 @@ export const LoginScreen = ({ navigation }: any) => {
   const handleLogin = () => {
     if (validarFormulario()) {
       // Si pasa las validaciones, pasa a (Home/Tabs)
-      navigation.replace('HomeTabs');
+      navigation.replace('HomeTabs', { role });
     }
   };
 
@@ -59,6 +60,22 @@ export const LoginScreen = ({ navigation }: any) => {
 
         <Text style={styles.title}>Bienvenido a Rentas de Honduras</Text>
         <Text style={styles.subtitle}>¡Tu siguiente hogar puede estar aquí!</Text>
+
+        <Text style={styles.roleLabel}>Selecciona tu rol</Text>
+        <View style={styles.roleRow}>
+          <TouchableOpacity
+            style={[styles.roleOption, role === 'member' && styles.roleSelected]}
+            onPress={() => setRole('member')}
+          >
+            <Text style={[styles.roleText, role === 'member' && styles.roleTextSelected]}>Member</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.roleOption, role === 'seller' && styles.roleSelected]}
+            onPress={() => setRole('seller')}
+          >
+            <Text style={[styles.roleText, role === 'seller' && styles.roleTextSelected]}>Seller</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* Formulario con validaciones en tiempo de ejecución */}
         <CustomInput
@@ -110,6 +127,42 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     color: '#64748B',
-    marginBottom: 30,
+    marginBottom: 20,
+  },
+  roleLabel: {
+    width: '100%',
+    marginBottom: 10,
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#334155',
+    textAlign: 'left',
+  },
+  roleRow: {
+    flexDirection: 'row',
+    width: '100%',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  roleOption: {
+    flex: 1,
+    paddingVertical: 12,
+    marginHorizontal: 5,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  roleSelected: {
+    backgroundColor: '#1E3A8A',
+    borderColor: '#1E3A8A',
+  },
+  roleText: {
+    color: '#1E293B',
+    fontWeight: 'bold',
+  },
+  roleTextSelected: {
+    color: '#FFFFFF',
   },
 });
