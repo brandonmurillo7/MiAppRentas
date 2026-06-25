@@ -1,10 +1,11 @@
 ﻿import React, { useCallback, useState } from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { ActivityIndicator, View, Text, Image, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { ActivityIndicator, Alert, View, Text, Image, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as ImagePicker from 'expo-image-picker';
 import { LoginScreen } from '../screens/LoginScreen';
 import { RegisterScreen } from '../screens/RegisterScreen';
 import { CreateListingScreen } from '../screens/CreateListingScreen';
@@ -193,7 +194,8 @@ const HomeScreen = ({ navigation }: any) => {
 };
 
 const ProfileScreen = () => {
-  const { user, signOut, theme, toggleTheme } = useAuth();
+  const { user, signOut, theme, toggleTheme, updateProfileImage } = useAuth();
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const backgroundColor = theme === 'light' ? '#F8FAFC' : '#0F172A';
   const cardColor = theme === 'light' ? '#FFFFFF' : '#111827';
   const textColor = theme === 'light' ? '#0F172A' : '#F8FAFC';
@@ -219,6 +221,76 @@ const ProfileScreen = () => {
 
   const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
   const profileHeading = fullName || (user?.email ? user.email.split('@')[0] : 'Usuario');
+  const profileImageSource = user?.profileImageUrl
+    ? { uri: user.profileImageUrl }
+    : require('../../assets/pngtree-avatar-icon-profile-icon-member-login-vector-isolated-png-image_1978396.jpg');
+
+  const handleProfilePhotoPick = async () => {
+    if (!user?.email) {
+      Alert.alert('Error', 'No se encontró el usuario actual.');
+      return;
+    }
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permiso requerido', 'Debes permitir acceso a tus fotos para actualizar tu perfil.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.9,
+    });
+
+    if (result.canceled) {
+      return;
+    }
+
+    const asset = result.assets[0];
+    const uri = asset.uri;
+    let extension = uri.split('.').pop()?.toLowerCase();
+    if (!extension || !['jpg', 'jpeg', 'png'].includes(extension)) {
+      extension = asset.mimeType === 'image/png' ? 'png' : 'jpg';
+    }
+
+    setIsUploadingPhoto(true);
+    try {
+      const response = await fetch(uri);
+      const arrayBuffer = await response.arrayBuffer();
+      const filePath = `profiles/${user.email}/avatar-${Date.now()}.${extension}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('property-images')
+        .upload(filePath, arrayBuffer, {
+          contentType: extension === 'png' ? 'image/png' : 'image/jpeg',
+          upsert: true,
+        });
+
+      if (uploadError) {
+        Alert.alert('Error', `No se pudo subir la foto de perfil. Detalle: ${uploadError.message}`);
+        setIsUploadingPhoto(false);
+        return;
+      }
+
+      const { data: publicData } = supabase.storage.from('property-images').getPublicUrl(filePath);
+      if (!publicData?.publicUrl) {
+        Alert.alert('Error', 'No se pudo obtener la URL pública de la foto.');
+        setIsUploadingPhoto(false);
+        return;
+      }
+
+      const ok = await updateProfileImage(publicData.publicUrl);
+      if (ok) {
+        Alert.alert('Listo', 'Foto de perfil actualizada correctamente.');
+      }
+    } catch (err) {
+      Alert.alert('Error', 'No se pudo procesar la imagen seleccionada.');
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
 
   return (
     <ScrollView contentContainerStyle={[styles.screenContainer, { backgroundColor }]}>      
@@ -228,10 +300,13 @@ const ProfileScreen = () => {
         </TouchableOpacity>
 
         <Image
-          source={require('../../assets/pngtree-avatar-icon-profile-icon-member-login-vector-isolated-png-image_1978396.jpg')}
+          source={profileImageSource}
           style={styles.profileImage}
-          resizeMode="contain"
+          resizeMode="cover"
         />
+        <TouchableOpacity style={styles.changePhotoButton} onPress={handleProfilePhotoPick} disabled={isUploadingPhoto}>
+          <Text style={styles.changePhotoButtonText}>{isUploadingPhoto ? 'Subiendo foto...' : 'Cambiar foto de perfil'}</Text>
+        </TouchableOpacity>
         <Text style={[styles.profileTitle, { color: textColor }]}>{profileHeading}</Text>
 
         <View style={styles.profileInfoRow}>
@@ -557,6 +632,18 @@ const styles = StyleSheet.create({
     borderRadius: 100,
     marginBottom: 18,
     backgroundColor: '#E2E8F0',
+  },
+  changePhotoButton: {
+    backgroundColor: '#1E3A8A',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    marginBottom: 12,
+  },
+  changePhotoButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
   },
   themeToggleTop: {
     position: 'absolute',

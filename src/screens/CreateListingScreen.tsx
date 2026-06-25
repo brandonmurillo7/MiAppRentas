@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Alert, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { Alert, Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { CustomButton } from '../components/CustomButton';
 import { useAuth } from '../context/AuthContext';
@@ -27,6 +27,7 @@ const SelectButton = ({
 
 export const CreateListingScreen = ({ navigation }: any) => {
   const { user } = useAuth();
+  const scrollRef = useRef<ScrollView>(null);
   const [contractType, setContractType] = useState<ContractType>('Venta');
   const [propertyType, setPropertyType] = useState<PropertyType>('Casa');
   const [neighborhood, setNeighborhood] = useState('');
@@ -64,6 +65,13 @@ export const CreateListingScreen = ({ navigation }: any) => {
 
     setIsSaving(true);
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        Alert.alert('Sesion expirada', 'Inicia sesion nuevamente para poder subir fotografias.');
+        setIsSaving(false);
+        return;
+      }
+
       const uploadedImageUrls: string[] = [];
 
       for (const uri of photos) {
@@ -87,7 +95,11 @@ export const CreateListingScreen = ({ navigation }: any) => {
           });
 
         if (uploadError) {
-          Alert.alert('Error al subir imágenes', 'No se pudo subir una fotografía. Verifica el bucket property-images en Supabase.');
+          const detail = uploadError.message || 'Error desconocido de Storage.';
+          Alert.alert(
+            'Error al subir imágenes',
+            `No se pudo subir una fotografía.\n\nDetalle: ${detail}\n\nVerifica que exista el bucket property-images y sus políticas de inserción/lectura para usuarios autenticados.`
+          );
           setIsSaving(false);
           return;
         }
@@ -159,10 +171,25 @@ export const CreateListingScreen = ({ navigation }: any) => {
     setPhotos(pickedUris);
   };
 
+  const scrollFocusedField = (target: number) => {
+    const scrollResponder = (scrollRef.current as any)?.getScrollResponder?.();
+    scrollResponder?.scrollResponderScrollNativeHandleToKeyboard(target, 120, true);
+  };
+
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Crear Nuevo...</Text>
-      <Text style={styles.subtitle}>Completa la información de tu propiedad</Text>
+    <KeyboardAvoidingView
+      style={styles.keyboardContainer}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 88 : 24}
+    >
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+      >
+        <Text style={styles.title}>Crear Nuevo...</Text>
+        <Text style={styles.subtitle}>Completa la información de tu propiedad</Text>
 
       <Text style={styles.label}>Tipo de Contrato</Text>
       <View style={styles.row}>
@@ -211,6 +238,7 @@ export const CreateListingScreen = ({ navigation }: any) => {
         <TextInput
           value={price}
           onChangeText={(text) => setPrice(text.replace(/\D/g, ''))}
+          onFocus={(event) => scrollFocusedField(event.nativeEvent.target)}
           keyboardType="numeric"
           style={[styles.input, styles.priceInput]}
         />
@@ -234,17 +262,23 @@ export const CreateListingScreen = ({ navigation }: any) => {
         </ScrollView>
       )}
 
-      <View style={styles.buttonWrapper}>
-        <CustomButton title={isSaving ? 'Guardando...' : 'Guardar Publicación'} onPress={handleSubmit} disabled={isSaving} />
-      </View>
-    </ScrollView>
+        <View style={styles.buttonWrapper}>
+          <CustomButton title={isSaving ? 'Guardando...' : 'Guardar Publicación'} onPress={handleSubmit} disabled={isSaving} />
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
 const styles = StyleSheet.create({
+  keyboardContainer: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
   container: {
     flexGrow: 1,
     padding: 20,
+    paddingBottom: 36,
     backgroundColor: '#F8FAFC',
   },
   title: {

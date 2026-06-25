@@ -8,6 +8,7 @@ export interface AuthUser {
   email: string;
   firstName: string;
   lastName: string;
+  profileImageUrl: string | null;
   role: AuthRole;
   sellerSince: string | null;
   sellerRating: number;
@@ -31,6 +32,7 @@ interface AuthContextData {
   theme: 'light' | 'dark';
   signUp: (payload: SignUpPayload) => Promise<boolean>;
   signIn: (identifier: string, password: string) => Promise<boolean>;
+  updateProfileImage: (imageUrl: string) => Promise<boolean>;
   signOut: () => Promise<void>;
   toggleTheme: () => void;
 }
@@ -79,6 +81,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const role = mapRole(session?.user?.user_metadata?.role, fallbackRole);
     const firstName = (session?.user?.user_metadata?.first_name || '').toString().trim();
     const lastName = (session?.user?.user_metadata?.last_name || '').toString().trim();
+    const profileImageUrl = (session?.user?.user_metadata?.profile_image_url || null) as string | null;
     const sellerSince = role === 'seller'
       ? (session?.user?.user_metadata?.seller_since || session?.user?.created_at || null)
       : null;
@@ -90,6 +93,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       email,
       firstName,
       lastName,
+      profileImageUrl,
       role,
       sellerSince,
       sellerRating,
@@ -231,6 +235,32 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setUser(null);
   };
 
+  const updateProfileImage = async (imageUrl: string) => {
+    try {
+      const { error } = await supabase.auth.updateUser({
+        data: {
+          profile_image_url: imageUrl,
+        },
+      });
+
+      if (error) {
+        console.warn('updateProfileImage error', error.message);
+        Alert.alert('Error', 'No se pudo guardar la foto de perfil.');
+        return false;
+      }
+
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (!sessionError) {
+        setUserFromSession(data.session);
+      }
+      return true;
+    } catch (err) {
+      console.warn('updateProfileImage exception', err);
+      Alert.alert('Error', 'No se pudo actualizar la foto de perfil.');
+      return false;
+    }
+  };
+
   const toggleTheme = () => {
     setTheme((current) => (current === 'light' ? 'dark' : 'light'));
   };
@@ -242,6 +272,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       theme,
       signUp,
       signIn,
+      updateProfileImage,
       signOut,
       toggleTheme,
     }),

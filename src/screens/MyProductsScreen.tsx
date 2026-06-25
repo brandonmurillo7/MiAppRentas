@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, FlatList, Image, Modal, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import supabase from '../lib/supabase';
 
@@ -9,6 +10,8 @@ interface ProductItem {
   contract_type: 'Venta' | 'Alquiler';
   property_type: 'Casa' | 'Local' | 'Apartamento';
   neighborhood: string;
+  description: string | null;
+  image_urls: string[] | null;
   price: number;
   currency: 'Lempiras' | 'Dolares';
   available: boolean;
@@ -17,9 +20,9 @@ interface ProductItem {
 
 const formatPrice = (price: number, currency: 'Lempiras' | 'Dolares') => {
   if (currency === 'Dolares') {
-    return `$ ${price.toLocaleString()}`;
+    return `$${price.toLocaleString()}`;
   }
-  return `L ${price.toLocaleString()}`;
+  return `L${price.toLocaleString()}`;
 };
 
 export const MyProductsScreen = () => {
@@ -28,7 +31,11 @@ export const MyProductsScreen = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showTypeMenu, setShowTypeMenu] = useState(false);
-  const [selectedType, setSelectedType] = useState<'Venta' | 'Alquiler'>('Venta');
+  const [selectedType, setSelectedType] = useState<'Todos' | 'Venta' | 'Alquiler'>('Todos');
+  const [expandedItemId, setExpandedItemId] = useState<number | null>(null);
+  const [galleryVisible, setGalleryVisible] = useState(false);
+  const [galleryImages, setGalleryImages] = useState<string[]>([]);
+  const [galleryIndex, setGalleryIndex] = useState(0);
 
   const backgroundColor = theme === 'light' ? '#F8FAFC' : '#0F172A';
   const cardColor = theme === 'light' ? '#FFFFFF' : '#111827';
@@ -44,7 +51,7 @@ export const MyProductsScreen = () => {
 
     const { data, error } = await supabase
       .from('properties')
-      .select('id, contract_type, property_type, neighborhood, price, currency, available, created_at')
+      .select('id, contract_type, property_type, neighborhood, description, image_urls, price, currency, available, created_at')
       .eq('owner_email', user.email)
       .order('created_at', { ascending: false });
 
@@ -71,7 +78,9 @@ export const MyProductsScreen = () => {
     setRefreshing(false);
   };
 
-  const filteredItems = items.filter((item) => item.contract_type === selectedType);
+  const filteredItems = selectedType === 'Todos'
+    ? items
+    : items.filter((item) => item.contract_type === selectedType);
 
   const toggleAvailability = async (item: ProductItem) => {
     if (!user?.email) {
@@ -94,6 +103,72 @@ export const MyProductsScreen = () => {
     }
   };
 
+  const deleteProduct = async (item: ProductItem) => {
+    if (!user?.email) {
+      return;
+    }
+
+    const { error } = await supabase
+      .from('properties')
+      .delete()
+      .eq('id', item.id)
+      .eq('owner_email', user.email);
+
+    if (error) {
+      Alert.alert('Error al eliminar', error.message);
+      return;
+    }
+
+    setItems((current) => current.filter((row) => row.id !== item.id));
+    setExpandedItemId((current) => (current === item.id ? null : current));
+  };
+
+  const confirmDeleteProduct = (item: ProductItem) => {
+    Alert.alert(
+      'Eliminar producto',
+      '¿Deseas borrar este producto? Esta accion no se puede deshacer.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: () => {
+            deleteProduct(item);
+          },
+        },
+      ]
+    );
+  };
+
+  const openGallery = (images: string[], index: number) => {
+    setGalleryImages(images);
+    setGalleryIndex(index);
+    setGalleryVisible(true);
+  };
+
+  const renderSummary = (item: ProductItem, textColor: string, subtitleColor: string) => {
+    const imageUrls = Array.isArray(item.image_urls) ? item.image_urls : [];
+    return (
+      <View style={styles.summaryWrap}>
+        {imageUrls.length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.summaryPhotosRow}>
+            {imageUrls.map((url, index) => (
+              <TouchableOpacity key={`${item.id}-${url}-${index}`} onPress={() => openGallery(imageUrls, index)}>
+                <Image source={{ uri: url }} style={styles.summaryImage} resizeMode="cover" />
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        )}
+        <View style={styles.summaryContent}>
+          <Text style={[styles.summaryTitle, { color: textColor }]}>Resumen</Text>
+          <Text style={[styles.summaryText, { color: subtitleColor }]} numberOfLines={3}>
+            {item.description?.trim() || 'Sin descripcion registrada para este producto.'}
+          </Text>
+        </View>
+      </View>
+    );
+  };
+
   if (loading) {
     return (
       <View style={[styles.center, { backgroundColor }]}> 
@@ -102,6 +177,8 @@ export const MyProductsScreen = () => {
       </View>
     );
   }
+
+  const viewportWidth = Dimensions.get('window').width;
 
   return (
     <View style={[styles.container, { backgroundColor }]}> 
@@ -115,13 +192,22 @@ export const MyProductsScreen = () => {
           onPress={() => setShowTypeMenu((current) => !current)}
         >
           <Text style={[styles.filterButtonText, { color: textColor }]}>
-            {selectedType === 'Venta' ? 'Mis Ventas' : 'Mis Rentas'}
+            {selectedType === 'Todos' ? 'Todos' : selectedType === 'Venta' ? 'Mis Ventas' : 'Mis Rentas'}
           </Text>
           <Text style={[styles.filterChevron, { color: subtitleColor }]}>{showTypeMenu ? '▲' : '▼'}</Text>
         </TouchableOpacity>
 
         {showTypeMenu && (
           <View style={[styles.filterMenu, { backgroundColor: cardColor, borderColor: theme === 'light' ? '#CBD5E1' : '#334155' }]}>
+            <TouchableOpacity
+              style={styles.filterMenuItem}
+              onPress={() => {
+                setSelectedType('Todos');
+                setShowTypeMenu(false);
+              }}
+            >
+              <Text style={[styles.filterMenuText, { color: textColor }]}>Todos</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={styles.filterMenuItem}
               onPress={() => {
@@ -159,20 +245,62 @@ export const MyProductsScreen = () => {
         ListEmptyComponent={
           <View style={[styles.emptyCard, { backgroundColor: cardColor }]}> 
             <Text style={[styles.emptyTitle, { color: textColor }]}>Sin resultados en esta vista</Text>
-            <Text style={[styles.emptySubtitle, { color: subtitleColor }]}>Cambia entre Mis Ventas y Mis Rentas para ver tus publicaciones.</Text>
+            <Text style={[styles.emptySubtitle, { color: subtitleColor }]}>Cambia entre Todos, Mis Ventas y Mis Rentas para ver tus publicaciones.</Text>
           </View>
         }
         renderItem={({ item, index }) => (
           <View style={[styles.tableRow, { backgroundColor: cardColor }]}> 
-            <Text style={[styles.rowCellIndex, { color: textColor }]}>{index + 1}.</Text>
-            <Text style={[styles.rowCellProduct, { color: textColor }]}>{item.property_type} en {item.neighborhood}</Text>
-            <Text style={[styles.rowCellPrice, { color: textColor }]}>{formatPrice(item.price, item.currency)}</Text>
+            <TouchableOpacity
+              style={styles.rowMainPressable}
+              onPress={() => setExpandedItemId((current) => (current === item.id ? null : item.id))}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.rowCellIndex, { color: textColor }]}>{index + 1}.</Text>
+              <Text style={[styles.rowCellProduct, { color: textColor }]} numberOfLines={1} ellipsizeMode="tail">
+                {item.property_type} en {item.neighborhood}
+              </Text>
+              <Text style={[styles.rowCellPrice, { color: textColor }]}>{formatPrice(item.price, item.currency)}</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={[styles.statusPill, item.available ? styles.statusYes : styles.statusNo]} onPress={() => toggleAvailability(item)}>
               <Text style={styles.statusText}>{item.available ? 'Disponible' : 'Ocupada'}</Text>
             </TouchableOpacity>
+            {expandedItemId === item.id && (
+              <TouchableOpacity style={styles.deleteButton} onPress={() => confirmDeleteProduct(item)}>
+                <Ionicons name="trash" size={16} color="#FFFFFF" />
+              </TouchableOpacity>
+            )}
+            {expandedItemId === item.id && renderSummary(item, textColor, subtitleColor)}
           </View>
         )}
       />
+
+      <Modal visible={galleryVisible} transparent={false} animationType="fade" onRequestClose={() => setGalleryVisible(false)}>
+        <View style={styles.galleryModal}>
+          <View style={styles.galleryHeader}>
+            <Text style={styles.galleryCounter}>{galleryImages.length > 0 ? `${galleryIndex + 1} / ${galleryImages.length}` : '0 / 0'}</Text>
+            <TouchableOpacity style={styles.galleryCloseButton} onPress={() => setGalleryVisible(false)}>
+              <Text style={styles.galleryCloseText}>Cerrar</Text>
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            contentOffset={{ x: galleryIndex * viewportWidth, y: 0 }}
+            onMomentumScrollEnd={(event) => {
+              const nextIndex = Math.round(event.nativeEvent.contentOffset.x / viewportWidth);
+              setGalleryIndex(nextIndex);
+            }}
+          >
+            {galleryImages.map((url, index) => (
+              <View key={`${url}-${index}`} style={[styles.gallerySlide, { width: viewportWidth }]}> 
+                <Image source={{ uri: url }} style={styles.galleryImage} resizeMode="contain" />
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -268,7 +396,8 @@ const styles = StyleSheet.create({
     width: '24%',
     fontSize: 13,
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: 'left',
+    paddingLeft: 0,
   },
   headerCellStatus: {
     width: '24%',
@@ -290,28 +419,47 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
     elevation: 2,
+    flexWrap: 'wrap',
+  },
+  rowMainPressable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '76%',
   },
   rowCellIndex: {
-    width: '10%',
+    width: 26,
     fontSize: 13,
     fontWeight: '700',
   },
   rowCellProduct: {
-    width: '42%',
+    flex: 1,
     fontSize: 13,
     fontWeight: '700',
+    marginRight: 6,
   },
   rowCellPrice: {
-    width: '24%',
+    minWidth: 98,
     fontSize: 13,
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: 'left',
+    paddingLeft: 2,
   },
   statusPill: {
     width: '24%',
     borderRadius: 999,
     paddingVertical: 6,
     alignItems: 'center',
+  },
+  deleteButton: {
+    position: 'absolute',
+    right: 10,
+    bottom: 10,
+    width: 30,
+    height: 30,
+    backgroundColor: '#DC2626',
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   statusYes: {
     backgroundColor: '#16A34A',
@@ -323,6 +471,75 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '700',
+  },
+  summaryWrap: {
+    width: '100%',
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#CBD5E1',
+    paddingTop: 10,
+  },
+  summaryPhotosRow: {
+    marginBottom: 10,
+    gap: 8,
+  },
+  summaryImage: {
+    width: 90,
+    height: 90,
+    borderRadius: 10,
+    backgroundColor: '#E2E8F0',
+  },
+  summaryContent: {
+    flex: 1,
+  },
+  summaryTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  summaryText: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  galleryModal: {
+    flex: 1,
+    backgroundColor: '#000000',
+    justifyContent: 'center',
+  },
+  galleryHeader: {
+    position: 'absolute',
+    top: 50,
+    left: 16,
+    right: 16,
+    zIndex: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  galleryCounter: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  galleryCloseButton: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  galleryCloseText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  gallerySlide: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  galleryImage: {
+    width: '100%',
+    height: '80%',
   },
   emptyContainer: {
     flexGrow: 1,
