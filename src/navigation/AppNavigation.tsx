@@ -1,7 +1,7 @@
 ﻿import React, { useCallback, useState } from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { ActivityIndicator, Alert, View, Text, Image, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { ActivityIndicator, Alert, Linking, View, Text, Image, StyleSheet, ScrollView, TextInput, TouchableOpacity } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -24,11 +24,223 @@ interface OwnerChatItem {
   status: 'abierto' | 'pendiente' | 'cerrado' | null;
 }
 
+interface MarketplaceItem {
+  id: number;
+  owner_email: string;
+  contract_type: 'Venta' | 'Alquiler';
+  property_type: 'Casa' | 'Local' | 'Apartamento';
+  neighborhood: string;
+  city: string;
+  description: string | null;
+  image_urls: string[] | null;
+  price: number;
+  currency: 'Lempiras' | 'Dolares';
+  available: boolean;
+}
+
+const PropertyDetailScreen = ({ route }: any) => {
+  const { item } = route.params as { item: MarketplaceItem };
+  const { user, theme } = useAuth();
+  const [messageText, setMessageText] = useState('');
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const backgroundColor = theme === 'light' ? '#F8FAFC' : '#0F172A';
+  const cardColor = theme === 'light' ? '#FFFFFF' : '#111827';
+  const textColor = theme === 'light' ? '#0F172A' : '#F8FAFC';
+  const subtitleColor = theme === 'light' ? '#64748B' : '#CBD5E1';
+
+  const formatMarketplacePrice = (value: number, currency: 'Lempiras' | 'Dolares') => {
+    if (currency === 'Dolares') {
+      return `$${value.toLocaleString()}`;
+    }
+    return `L${value.toLocaleString()}`;
+  };
+
+  const handleScheduleVisit = async () => {
+    if (!item.owner_email) {
+      Alert.alert('Error', 'No se encontró el correo del propietario.');
+      return;
+    }
+
+    const tenantPhone = user?.phone?.trim();
+    if (!tenantPhone) {
+      Alert.alert('Telefono requerido', 'Debes tener un numero de telefono registrado para agendar una cita.');
+      return;
+    }
+
+    const subject = `Solicitud de visita - ${item.property_type} en ${item.neighborhood}`;
+    const body = [
+      `Hola, me interesa agendar una cita para visitar la propiedad:`,
+      `${item.property_type} en ${item.neighborhood}, ${item.city}.`,
+      `Tipo: ${item.contract_type}.`,
+      `Precio: ${formatMarketplacePrice(item.price, item.currency)}.`,
+      '',
+      `Mis datos:`,
+      `Correo: ${user?.email || 'No disponible'}`,
+      `Telefono: ${tenantPhone}`,
+      '',
+      'Quedo atento(a) a tu confirmacion.',
+    ].join('\n');
+
+    const mailUrl = `mailto:${item.owner_email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    const supported = await Linking.canOpenURL(mailUrl);
+
+    if (!supported) {
+      Alert.alert('Error', 'No se encontró una app de correo en este dispositivo.');
+      return;
+    }
+
+    await Linking.openURL(mailUrl);
+  };
+
+  const handleSendMessage = async () => {
+    const trimmedMessage = messageText.trim();
+    if (!trimmedMessage) {
+      Alert.alert('Mensaje requerido', 'Escribe un mensaje para el propietario.');
+      return;
+    }
+
+    if (!item.owner_email) {
+      Alert.alert('Error', 'No se encontró el correo del propietario.');
+      return;
+    }
+
+    if (!user?.email) {
+      Alert.alert('Error', 'No se encontró tu sesión actual.');
+      return;
+    }
+
+    const contactName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
+    const listingTitle = `${item.contract_type} - ${item.property_type} en ${item.neighborhood}, ${item.city}`;
+
+    setIsSendingMessage(true);
+    try {
+      const { data: existingChat, error: findError } = await supabase
+        .from('owner_chats')
+        .select('id')
+        .eq('owner_email', item.owner_email)
+        .eq('contact_email', user.email)
+        .eq('listing_title', listingTitle)
+        .maybeSingle();
+
+      if (findError) {
+        Alert.alert('Error', `No se pudo iniciar la conversación. Detalle: ${findError.message}`);
+        setIsSendingMessage(false);
+        return;
+      }
+
+      if (existingChat?.id) {
+        const { error: updateError } = await supabase
+          .from('owner_chats')
+          .update({
+            last_message: trimmedMessage,
+            last_message_at: new Date().toISOString(),
+            status: 'pendiente',
+          })
+          .eq('id', existingChat.id);
+
+        if (updateError) {
+          Alert.alert('Error', `No se pudo enviar el mensaje. Detalle: ${updateError.message}`);
+          setIsSendingMessage(false);
+          return;
+        }
+      } else {
+        const { error: insertError } = await supabase.from('owner_chats').insert({
+          owner_email: item.owner_email,
+          contact_name: contactName || null,
+          contact_email: user.email,
+          listing_title: listingTitle,
+          last_message: trimmedMessage,
+          last_message_at: new Date().toISOString(),
+          status: 'pendiente',
+        });
+
+        if (insertError) {
+          Alert.alert('Error', `No se pudo enviar el mensaje. Detalle: ${insertError.message}`);
+          setIsSendingMessage(false);
+          return;
+        }
+      }
+
+      setMessageText('');
+      Alert.alert('Mensaje enviado', 'Tu mensaje fue enviado al propietario.');
+    } catch (err) {
+      Alert.alert('Error', 'Ocurrió un problema al enviar el mensaje.');
+    } finally {
+      setIsSendingMessage(false);
+    }
+  };
+
+  return (
+    <ScrollView contentContainerStyle={[styles.detailContainer, { backgroundColor }]}> 
+      <View style={[styles.detailCard, { backgroundColor: cardColor }]}> 
+        <Text style={[styles.detailTitle, { color: textColor }]}>{item.property_type} en {item.neighborhood}</Text>
+        <Text style={[styles.detailSubtitle, { color: subtitleColor }]}>{item.city} · {item.contract_type}</Text>
+
+        {Array.isArray(item.image_urls) && item.image_urls.length > 0 ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.detailImagesRow}>
+            {item.image_urls.map((url, index) => (
+              <Image key={`${item.id}-${url}-${index}`} source={{ uri: url }} style={styles.detailImage} resizeMode="cover" />
+            ))}
+          </ScrollView>
+        ) : (
+          <View style={styles.detailNoImageWrap}>
+            <Text style={[styles.detailNoImageText, { color: subtitleColor }]}>Sin fotografias disponibles</Text>
+          </View>
+        )}
+
+        <View style={styles.detailInfoRow}>
+          <Text style={[styles.detailLabel, { color: subtitleColor }]}>Precio</Text>
+          <Text style={[styles.detailValue, { color: textColor }]}>{formatMarketplacePrice(item.price, item.currency)}</Text>
+        </View>
+        <View style={styles.detailInfoRow}>
+          <Text style={[styles.detailLabel, { color: subtitleColor }]}>Tipo de contrato</Text>
+          <Text style={[styles.detailValue, { color: textColor }]}>{item.contract_type}</Text>
+        </View>
+        <View style={styles.detailInfoRow}>
+          <Text style={[styles.detailLabel, { color: subtitleColor }]}>Ubicacion</Text>
+          <Text style={[styles.detailValue, { color: textColor }]}>{item.neighborhood}, {item.city}</Text>
+        </View>
+
+        <Text style={[styles.detailDescription, { color: subtitleColor }]}>
+          {item.description?.trim() || 'Sin descripcion disponible para esta propiedad.'}
+        </Text>
+
+        <Text style={[styles.detailLabel, { color: subtitleColor, marginTop: 16 }]}>Mensaje para el propietario</Text>
+        <TextInput
+          value={messageText}
+          onChangeText={setMessageText}
+          placeholder="Escribe tu mensaje aquí"
+          placeholderTextColor={theme === 'light' ? '#94A3B8' : '#64748B'}
+          multiline
+          numberOfLines={4}
+          textAlignVertical="top"
+          style={[styles.messageInput, { color: textColor, borderColor: theme === 'light' ? '#CBD5E1' : '#334155', backgroundColor: theme === 'light' ? '#F8FAFC' : '#0B1220' }]}
+        />
+
+        <TouchableOpacity style={[styles.scheduleButton, styles.messageButton]} onPress={handleSendMessage} disabled={isSendingMessage}>
+          <Text style={styles.scheduleButtonText}>{isSendingMessage ? 'Enviando...' : 'Envia un mensaje'}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.scheduleButton} onPress={handleScheduleVisit}>
+          <Text style={styles.scheduleButtonText}>Agenda una cita</Text>
+        </TouchableOpacity>
+      </View>
+    </ScrollView>
+  );
+};
+
 const HomeScreen = ({ navigation }: any) => {
   const { user, theme } = useAuth();
   const [chats, setChats] = useState<OwnerChatItem[]>([]);
   const [isLoadingChats, setIsLoadingChats] = useState(true);
   const [listingFilter, setListingFilter] = useState<'Venta' | 'Alquiler'>('Venta');
+  const [marketItems, setMarketItems] = useState<MarketplaceItem[]>([]);
+  const [isLoadingMarket, setIsLoadingMarket] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showTenantFilters, setShowTenantFilters] = useState(false);
+  const [contractFilter, setContractFilter] = useState<'Todos' | 'Venta' | 'Alquiler'>('Todos');
+  const [propertyFilter, setPropertyFilter] = useState<'Todos' | 'Casa' | 'Local' | 'Apartamento'>('Todos');
+  const [currencyFilter, setCurrencyFilter] = useState<'Todas' | 'Lempiras' | 'Dolares'>('Todas');
   const backgroundColor = theme === 'light' ? '#F8FAFC' : '#0F172A';
   const cardColor = theme === 'light' ? '#FFFFFF' : '#111827';
   const textColor = theme === 'light' ? '#0F172A' : '#F8FAFC';
@@ -89,10 +301,31 @@ const HomeScreen = ({ navigation }: any) => {
     setIsLoadingChats(false);
   }, [user?.email, user?.role]);
 
+  const fetchTenantListings = useCallback(async () => {
+    setIsLoadingMarket(true);
+    const { data, error } = await supabase
+      .from('properties')
+      .select('id, owner_email, contract_type, property_type, neighborhood, city, description, image_urls, price, currency, available')
+      .eq('available', true)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.warn('fetchTenantListings error', error.message);
+      setMarketItems([]);
+    } else {
+      setMarketItems((data || []) as MarketplaceItem[]);
+    }
+    setIsLoadingMarket(false);
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
-      fetchOwnerChats();
-    }, [fetchOwnerChats])
+      if (user?.role === 'seller') {
+        fetchOwnerChats();
+      } else {
+        fetchTenantListings();
+      }
+    }, [fetchOwnerChats, fetchTenantListings, user?.role])
   );
 
   const filteredChats = chats.filter((chat) => {
@@ -174,21 +407,130 @@ const HomeScreen = ({ navigation }: any) => {
     );
   }
 
+  const filteredMarketplaceItems = marketItems.filter((item) => {
+    const normalizedSearch = searchQuery.trim().toLowerCase();
+    const searchable = `${item.property_type} ${item.contract_type} ${item.neighborhood} ${item.city} ${item.description || ''}`.toLowerCase();
+
+    if (normalizedSearch && !searchable.includes(normalizedSearch)) {
+      return false;
+    }
+
+    if (contractFilter !== 'Todos' && item.contract_type !== contractFilter) {
+      return false;
+    }
+
+    if (propertyFilter !== 'Todos' && item.property_type !== propertyFilter) {
+      return false;
+    }
+
+    if (currencyFilter !== 'Todas' && item.currency !== currencyFilter) {
+      return false;
+    }
+
+    return true;
+  });
+
+  const formatMarketplacePrice = (value: number, currency: 'Lempiras' | 'Dolares') => {
+    if (currency === 'Dolares') {
+      return `$${value.toLocaleString()}`;
+    }
+    return `L${value.toLocaleString()}`;
+  };
+
   return (
     <ScrollView contentContainerStyle={[styles.screenContainer, { backgroundColor }]}>      
       <View style={[styles.welcomeCard, { backgroundColor: cardColor }]}>        
-        <Text style={[styles.homeTitle, { color: textColor }]}>Bienvenido a Rentas de Honduras</Text>
-        <Text style={[styles.homeSubtitle, { color: subtitleColor }]}>Explora propiedades y gestiona tu perfil con comodidad desde tu teléfono.</Text>
-        <View style={[styles.infoBadge, { backgroundColor: theme === 'light' ? '#E0E7FF' : '#1E293B' }]}>          
-          <Text style={[styles.badgeText, { color: theme === 'light' ? '#3730A3' : '#E2E8F0' }]}>Rol: Inquilino</Text>
-        </View>
-      </View>
+        <TextInput
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder="Buscar por ciudad, colonia o tipo de propiedad"
+          placeholderTextColor={theme === 'light' ? '#94A3B8' : '#64748B'}
+          style={[styles.searchInput, { color: textColor, borderColor: theme === 'light' ? '#CBD5E1' : '#334155', backgroundColor: theme === 'light' ? '#F8FAFC' : '#0B1220' }]}
+        />
 
-      <Image
-        source={require('../../assets/inmobiliaria-granada-granatte-71.jpg')}
-        style={styles.homeImageLarge}
-        resizeMode="cover"
-      />
+        <TouchableOpacity
+          style={[styles.tenantFiltersToggle, { backgroundColor: theme === 'light' ? '#E2E8F0' : '#1E293B' }]}
+          onPress={() => setShowTenantFilters((current) => !current)}
+        >
+          <Text style={[styles.tenantFiltersToggleText, { color: textColor }]}>Filtros</Text>
+          <Text style={[styles.tenantFiltersToggleChevron, { color: subtitleColor }]}>{showTenantFilters ? '▲' : '▼'}</Text>
+        </TouchableOpacity>
+
+        {showTenantFilters && (
+          <View style={styles.tenantFiltersBox}>
+            <Text style={[styles.marketFilterLabel, { color: subtitleColor }]}>Tipo de contrato</Text>
+            <View style={styles.marketFilterRow}>
+              {(['Todos', 'Venta', 'Alquiler'] as const).map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[styles.marketFilterChip, contractFilter === option ? styles.marketFilterChipActive : styles.marketFilterChipInactive]}
+                  onPress={() => setContractFilter(option)}
+                >
+                  <Text style={styles.marketFilterChipText}>{option === 'Todos' ? 'Todos' : option}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={[styles.marketFilterLabel, { color: subtitleColor }]}>Tipo de propiedad</Text>
+            <View style={styles.marketFilterRowWrap}>
+              {(['Todos', 'Casa', 'Local', 'Apartamento'] as const).map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[styles.marketFilterChip, propertyFilter === option ? styles.marketFilterChipActive : styles.marketFilterChipInactive]}
+                  onPress={() => setPropertyFilter(option)}
+                >
+                  <Text style={styles.marketFilterChipText}>{option}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={[styles.marketFilterLabel, { color: subtitleColor }]}>Moneda</Text>
+            <View style={styles.marketFilterRow}>
+              {(['Todas', 'Lempiras', 'Dolares'] as const).map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[styles.marketFilterChip, currencyFilter === option ? styles.marketFilterChipActive : styles.marketFilterChipInactive]}
+                  onPress={() => setCurrencyFilter(option)}
+                >
+                  <Text style={styles.marketFilterChipText}>{option}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {isLoadingMarket ? (
+          <View style={styles.chatLoaderWrap}>
+            <ActivityIndicator size="small" color="#1E3A8A" />
+            <Text style={[styles.chatLoaderText, { color: subtitleColor }]}>Cargando propiedades...</Text>
+          </View>
+        ) : filteredMarketplaceItems.length === 0 ? (
+          <View style={[styles.chatEmptyCard, { backgroundColor: theme === 'light' ? '#F8FAFC' : '#0F172A' }]}> 
+            <Text style={[styles.chatEmptyTitle, { color: textColor }]}>Sin resultados</Text>
+            <Text style={[styles.chatEmptySubtitle, { color: subtitleColor }]}>Ajusta el buscador o los filtros para ver propiedades disponibles.</Text>
+          </View>
+        ) : (
+          filteredMarketplaceItems.map((item) => {
+            const imageUrl = Array.isArray(item.image_urls) && item.image_urls.length > 0 ? item.image_urls[0] : null;
+            return (
+              <TouchableOpacity
+                key={item.id}
+                style={[styles.marketCard, { backgroundColor: theme === 'light' ? '#F8FAFC' : '#0F172A' }]}
+                activeOpacity={0.85}
+                onPress={() => navigation.getParent()?.navigate('PropertyDetail', { item })}
+              > 
+                {!!imageUrl && <Image source={{ uri: imageUrl }} style={styles.marketImage} resizeMode="cover" />}
+                <Text style={[styles.marketTitle, { color: textColor }]}>{item.property_type} en {item.neighborhood}</Text>
+                <Text style={[styles.marketSubtitle, { color: subtitleColor }]}>{item.city} · {item.contract_type}</Text>
+                <Text style={[styles.marketPrice, { color: textColor }]}>{formatMarketplacePrice(item.price, item.currency)}</Text>
+                <Text style={[styles.marketDescription, { color: subtitleColor }]} numberOfLines={2}>
+                  {item.description?.trim() || 'Sin descripcion disponible.'}
+                </Text>
+              </TouchableOpacity>
+            );
+          })
+        )}
+      </View>
     </ScrollView>
   );
 };
@@ -415,6 +757,7 @@ export const AppNavigation = () => {
         <>
           <Stack.Screen name="HomeTabs" component={HomeTabs} />
           <Stack.Screen name="CreateListing" component={CreateListingScreen} options={{ headerShown: true, title: 'Crear Nuevo' }} />
+          <Stack.Screen name="PropertyDetail" component={PropertyDetailScreen} options={{ headerShown: true, title: 'Detalle de Propiedad' }} />
         </>
       ) : (
         <>
@@ -475,6 +818,192 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 260,
     borderRadius: 24,
+  },
+  searchInput: {
+    width: '100%',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    marginBottom: 12,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  tenantFiltersToggle: {
+    width: '100%',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  tenantFiltersToggleText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  tenantFiltersToggleChevron: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  tenantFiltersBox: {
+    marginBottom: 6,
+  },
+  marketFilterLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  marketFilterRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 10,
+  },
+  marketFilterRowWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 10,
+  },
+  marketFilterChip: {
+    borderRadius: 999,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+  },
+  marketFilterChipActive: {
+    backgroundColor: '#1E3A8A',
+  },
+  marketFilterChipInactive: {
+    backgroundColor: '#475569',
+  },
+  marketFilterChipText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  marketCard: {
+    borderRadius: 14,
+    padding: 12,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  marketImage: {
+    width: '100%',
+    height: 140,
+    borderRadius: 10,
+    marginBottom: 8,
+    backgroundColor: '#E2E8F0',
+  },
+  marketTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  marketSubtitle: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  marketPrice: {
+    marginTop: 8,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  marketDescription: {
+    marginTop: 6,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  detailContainer: {
+    flexGrow: 1,
+    padding: 20,
+  },
+  detailCard: {
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  detailTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  detailSubtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  detailImagesRow: {
+    gap: 8,
+    marginBottom: 12,
+  },
+  detailImage: {
+    width: 220,
+    height: 140,
+    borderRadius: 12,
+    backgroundColor: '#E2E8F0',
+  },
+  detailNoImageWrap: {
+    width: '100%',
+    height: 120,
+    borderRadius: 12,
+    backgroundColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  detailNoImageText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  detailInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  detailLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  detailValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    maxWidth: '62%',
+    textAlign: 'right',
+  },
+  detailDescription: {
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  messageInput: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 90,
+    fontSize: 14,
+  },
+  scheduleButton: {
+    marginTop: 16,
+    backgroundColor: '#1E3A8A',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  messageButton: {
+    marginTop: 12,
+    backgroundColor: '#0F766E',
+  },
+  scheduleButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
   },
   ownerHeaderRow: {
     width: '100%',

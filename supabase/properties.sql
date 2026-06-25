@@ -40,6 +40,13 @@ to authenticated
 using (true)
 with check (true);
 
+drop policy if exists "Authenticated users can delete own properties" on public.properties;
+create policy "Authenticated users can delete own properties"
+on public.properties
+for delete
+to authenticated
+using (owner_email = auth.email());
+
 -- Phone login index (maps phone to email for sign-in with password)
 create table if not exists public.user_phone_login (
   email text primary key,

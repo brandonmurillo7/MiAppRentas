@@ -108,19 +108,25 @@ export const MyProductsScreen = () => {
       return;
     }
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('properties')
       .delete()
       .eq('id', item.id)
-      .eq('owner_email', user.email);
+      .select('id');
 
     if (error) {
-      Alert.alert('Error al eliminar', error.message);
+      Alert.alert('Error al eliminar', `${error.message}\n\nVerifica que exista politica DELETE en public.properties.`);
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      Alert.alert('No se pudo eliminar', 'No se eliminó ninguna publicación. Revisa permisos RLS DELETE en Supabase.');
       return;
     }
 
     setItems((current) => current.filter((row) => row.id !== item.id));
     setExpandedItemId((current) => (current === item.id ? null : current));
+    fetchProducts();
   };
 
   const confirmDeleteProduct = (item: ProductItem) => {
@@ -460,6 +466,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     alignItems: 'center',
     justifyContent: 'center',
+    zIndex: 3,
   },
   statusYes: {
     backgroundColor: '#16A34A',
