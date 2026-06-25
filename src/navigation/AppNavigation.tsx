@@ -16,12 +16,24 @@ import supabase from '../lib/supabase';
 
 interface OwnerChatItem {
   id: number;
+  owner_email?: string | null;
   contact_name: string | null;
   contact_email: string | null;
   listing_title: string | null;
   last_message: string | null;
   last_message_at: string | null;
   status: 'abierto' | 'pendiente' | 'cerrado' | null;
+  is_read_by_owner?: boolean;
+  is_read_by_tenant?: boolean;
+}
+
+interface OwnerChatMessageItem {
+  id: number;
+  chat_id: number;
+  sender_role: 'owner' | 'tenant';
+  sender_email: string | null;
+  message: string;
+  created_at: string;
 }
 
 interface MarketplaceItem {
@@ -109,18 +121,21 @@ const PropertyDetailScreen = ({ route }: any) => {
       return;
     }
 
+    const ownerEmail = item.owner_email.trim().toLowerCase();
+    const contactEmail = user.email.trim().toLowerCase();
     const contactName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
     const listingTitle = `${item.contract_type} - ${item.property_type} en ${item.neighborhood}, ${item.city}`;
 
     setIsSendingMessage(true);
     try {
-      const { data: existingChat, error: findError } = await supabase
+      const { data: existingChats, error: findError } = await supabase
         .from('owner_chats')
         .select('id')
-        .eq('owner_email', item.owner_email)
-        .eq('contact_email', user.email)
+        .eq('owner_email', ownerEmail)
+        .eq('contact_email', contactEmail)
         .eq('listing_title', listingTitle)
-        .maybeSingle();
+        .order('last_message_at', { ascending: false })
+        .limit(1);
 
       if (findError) {
         Alert.alert('Error', `No se pudo iniciar la conversación. Detalle: ${findError.message}`);
@@ -128,7 +143,11 @@ const PropertyDetailScreen = ({ route }: any) => {
         return;
       }
 
-      if (existingChat?.id) {
+      const existingChatId = existingChats?.[0]?.id;
+
+      let activeChatId = existingChatId || null;
+
+      if (existingChatId) {
         const { error: updateError } = await supabase
           .from('owner_chats')
           .update({
@@ -136,7 +155,7 @@ const PropertyDetailScreen = ({ route }: any) => {
             last_message_at: new Date().toISOString(),
             status: 'pendiente',
           })
-          .eq('id', existingChat.id);
+          .eq('id', existingChatId);
 
         if (updateError) {
           Alert.alert('Error', `No se pudo enviar el mensaje. Detalle: ${updateError.message}`);
@@ -144,21 +163,49 @@ const PropertyDetailScreen = ({ route }: any) => {
           return;
         }
       } else {
-        const { error: insertError } = await supabase.from('owner_chats').insert({
-          owner_email: item.owner_email,
-          contact_name: contactName || null,
-          contact_email: user.email,
-          listing_title: listingTitle,
-          last_message: trimmedMessage,
-          last_message_at: new Date().toISOString(),
-          status: 'pendiente',
-        });
+        const { data: insertChatData, error: insertError } = await supabase
+          .from('owner_chats')
+          .insert({
+            owner_email: ownerEmail,
+            contact_name: contactName || null,
+            contact_email: contactEmail,
+            listing_title: listingTitle,
+            last_message: trimmedMessage,
+            last_message_at: new Date().toISOString(),
+            status: 'pendiente',
+          })
+          .select('id')
+          .single();
 
         if (insertError) {
           Alert.alert('Error', `No se pudo enviar el mensaje. Detalle: ${insertError.message}`);
           setIsSendingMessage(false);
           return;
         }
+
+        activeChatId = insertChatData?.id || null;
+      }
+
+      if (activeChatId) {
+        const { error: messageInsertError } = await supabase.from('owner_chat_messages').insert({
+          chat_id: activeChatId,
+          sender_role: 'tenant',
+          sender_email: contactEmail,
+          message: trimmedMessage,
+          created_at: new Date().toISOString(),
+        });
+
+        if (messageInsertError) {
+          console.warn('owner_chat_messages insert error', messageInsertError.message);
+        }
+
+        await supabase
+          .from('owner_chats')
+          .update({ is_read_by_owner: false })
+          .eq('id', activeChatId)
+          .then(() => {
+            return;
+          });
       }
 
       setMessageText('');
@@ -229,6 +276,475 @@ const PropertyDetailScreen = ({ route }: any) => {
   );
 };
 
+const OwnerChatDetailScreen = ({ route }: any) => {
+  const { chat } = route.params as { chat: OwnerChatItem };
+  const { user, theme } = useAuth();
+  const [messages, setMessages] = useState<OwnerChatMessageItem[]>([]);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(true);
+  const [replyText, setReplyText] = useState('');
+  const [isSendingReply, setIsSendingReply] = useState(false);
+  const backgroundColor = theme === 'light' ? '#F8FAFC' : '#0F172A';
+  const cardColor = theme === 'light' ? '#FFFFFF' : '#111827';
+  const textColor = theme === 'light' ? '#0F172A' : '#F8FAFC';
+  const subtitleColor = theme === 'light' ? '#64748B' : '#CBD5E1';
+
+  const fetchMessages = useCallback(async () => {
+    setIsLoadingMessages(true);
+    const { data, error } = await supabase
+      .from('owner_chat_messages')
+      .select('id, chat_id, sender_role, sender_email, message, created_at')
+      .eq('chat_id', chat.id)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.warn('fetch owner chat messages error', error.message);
+      setMessages([]);
+      setIsLoadingMessages(false);
+      return;
+    }
+
+    setMessages((data || []) as OwnerChatMessageItem[]);
+    setIsLoadingMessages(false);
+  }, [chat.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchMessages();
+      supabase
+        .from('owner_chats')
+        .update({ status: 'abierto', is_read_by_owner: true })
+        .eq('id', chat.id)
+        .then(() => {
+          return;
+        });
+    }, [chat.id, fetchMessages])
+  );
+
+  const handleSendReply = async () => {
+    const trimmedReply = replyText.trim();
+    if (!trimmedReply) {
+      Alert.alert('Mensaje requerido', 'Escribe un mensaje para el inquilino.');
+      return;
+    }
+
+    if (!user?.email) {
+      Alert.alert('Error', 'No se encontró tu sesión actual.');
+      return;
+    }
+
+    setIsSendingReply(true);
+    const nowIso = new Date().toISOString();
+
+    const { error: insertMessageError } = await supabase.from('owner_chat_messages').insert({
+      chat_id: chat.id,
+      sender_role: 'owner',
+      sender_email: user.email.trim().toLowerCase(),
+      message: trimmedReply,
+      created_at: nowIso,
+    });
+
+    if (insertMessageError) {
+      Alert.alert('Error', `No se pudo enviar la respuesta. Detalle: ${insertMessageError.message}`);
+      setIsSendingReply(false);
+      return;
+    }
+
+    const { error: updateChatError } = await supabase
+      .from('owner_chats')
+      .update({
+        last_message: trimmedReply,
+        last_message_at: nowIso,
+        status: 'abierto',
+        is_read_by_tenant: false,
+      })
+      .eq('id', chat.id);
+
+    if (updateChatError) {
+      Alert.alert('Atencion', `Se envió el mensaje pero no se pudo actualizar el resumen. Detalle: ${updateChatError.message}`);
+    }
+
+    setReplyText('');
+    await fetchMessages();
+    setIsSendingReply(false);
+  };
+
+  const historyToRender = messages.length
+    ? messages
+    : chat.last_message
+      ? [{
+          id: 0,
+          chat_id: chat.id,
+          sender_role: 'tenant' as const,
+          sender_email: chat.contact_email,
+          message: chat.last_message,
+          created_at: chat.last_message_at || new Date().toISOString(),
+        }]
+      : [];
+
+  return (
+    <ScrollView contentContainerStyle={[styles.ownerChatDetailContainer, { backgroundColor }]}> 
+      <View style={[styles.ownerChatDetailCard, { backgroundColor: cardColor }]}> 
+        <Text style={[styles.ownerChatDetailTitle, { color: textColor }]}>{chat.contact_name || chat.contact_email || 'Interesado'}</Text>
+        <Text style={[styles.ownerChatDetailSubtitle, { color: subtitleColor }]}>{chat.listing_title || 'Publicación sin título'}</Text>
+
+        {isLoadingMessages ? (
+          <View style={styles.chatLoaderWrap}>
+            <ActivityIndicator size="small" color="#1E3A8A" />
+            <Text style={[styles.chatLoaderText, { color: subtitleColor }]}>Cargando conversación...</Text>
+          </View>
+        ) : historyToRender.length === 0 ? (
+          <View style={[styles.chatEmptyCard, { backgroundColor: theme === 'light' ? '#F8FAFC' : '#0F172A' }]}>
+            <Text style={[styles.chatEmptyTitle, { color: textColor }]}>Sin mensajes</Text>
+            <Text style={[styles.chatEmptySubtitle, { color: subtitleColor }]}>Envía una respuesta para iniciar la conversación.</Text>
+          </View>
+        ) : (
+          <View style={styles.ownerMessagesWrap}>
+            {historyToRender.map((message) => {
+              const isOwner = message.sender_role === 'owner';
+              return (
+                <View
+                  key={`${message.id}-${message.created_at}`}
+                  style={[
+                    styles.ownerMessageBubble,
+                    isOwner ? styles.ownerMessageBubbleOwner : styles.ownerMessageBubbleTenant,
+                  ]}
+                >
+                  <Text style={styles.ownerMessageSender}>{isOwner ? 'Propietario' : 'Inquilino'}</Text>
+                  <Text style={styles.ownerMessageText}>{message.message}</Text>
+                  <Text style={styles.ownerMessageDate}>{new Date(message.created_at).toLocaleString()}</Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        <TextInput
+          value={replyText}
+          onChangeText={setReplyText}
+          placeholder="Escribe una respuesta para el inquilino"
+          placeholderTextColor={theme === 'light' ? '#94A3B8' : '#64748B'}
+          multiline
+          numberOfLines={4}
+          textAlignVertical="top"
+          style={[
+            styles.messageInput,
+            {
+              color: textColor,
+              borderColor: theme === 'light' ? '#CBD5E1' : '#334155',
+              backgroundColor: theme === 'light' ? '#F8FAFC' : '#0B1220',
+            },
+          ]}
+        />
+
+        <TouchableOpacity style={styles.scheduleButton} onPress={handleSendReply} disabled={isSendingReply}>
+          <Text style={styles.scheduleButtonText}>{isSendingReply ? 'Enviando...' : 'Responder al inquilino'}</Text>
+        </TouchableOpacity>
+      </View>
+    </ScrollView>
+  );
+};
+
+const TenantChatsScreen = ({ navigation }: any) => {
+  const { user, theme } = useAuth();
+  const [chats, setChats] = useState<OwnerChatItem[]>([]);
+  const [isLoadingChats, setIsLoadingChats] = useState(true);
+  const backgroundColor = theme === 'light' ? '#F8FAFC' : '#0F172A';
+  const cardColor = theme === 'light' ? '#FFFFFF' : '#111827';
+  const textColor = theme === 'light' ? '#0F172A' : '#F8FAFC';
+  const subtitleColor = theme === 'light' ? '#64748B' : '#CBD5E1';
+
+  const formatDate = (value: string | null) => {
+    if (!value) {
+      return 'Sin actividad';
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return 'Sin actividad';
+    }
+    return parsed.toLocaleDateString();
+  };
+
+  const statusLabel = (value: OwnerChatItem['status']) => {
+    if (value === 'cerrado') {
+      return 'Cerrado';
+    }
+    if (value === 'pendiente') {
+      return 'Pendiente';
+    }
+    return 'Abierto';
+  };
+
+  const statusStyle = (value: OwnerChatItem['status']) => {
+    if (value === 'cerrado') {
+      return styles.chatStatusClosed;
+    }
+    if (value === 'pendiente') {
+      return styles.chatStatusPending;
+    }
+    return styles.chatStatusOpen;
+  };
+
+  const fetchTenantChats = useCallback(async () => {
+    if (!user?.email || user.role !== 'member') {
+      setChats([]);
+      setIsLoadingChats(false);
+      return;
+    }
+
+    setIsLoadingChats(true);
+    const normalizedContactEmail = user.email.trim().toLowerCase();
+    const { data, error } = await supabase
+      .from('owner_chats')
+      .select('id, owner_email, contact_name, contact_email, listing_title, last_message, last_message_at, status')
+      .eq('contact_email', normalizedContactEmail)
+      .order('last_message_at', { ascending: false });
+
+    if (error) {
+      console.warn('fetchTenantChats error', error.message);
+      setChats([]);
+    } else {
+      setChats((data || []) as OwnerChatItem[]);
+    }
+
+    setIsLoadingChats(false);
+  }, [user?.email, user?.role]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchTenantChats();
+    }, [fetchTenantChats])
+  );
+
+  const unreadCount = chats.filter((c) => !c.is_read_by_tenant).length;
+
+  return (
+    <ScrollView contentContainerStyle={[styles.screenContainer, styles.ownerScreenContainer, { backgroundColor }]}> 
+      <View style={[styles.welcomeCard, styles.ownerWelcomeCard, { backgroundColor: cardColor }]}> 
+        <View style={styles.ownerHeaderRow}>
+          <View style={styles.ownerHeaderTextBlock}>
+            <Text style={[styles.homeTitle, { color: textColor }]}>Mis Mensajes</Text>
+          </View>
+          <TouchableOpacity style={styles.refreshChatsButton} onPress={fetchTenantChats}>
+            <Ionicons name="refresh" size={16} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
+
+        {isLoadingChats ? (
+          <View style={styles.chatLoaderWrap}>
+            <ActivityIndicator size="small" color="#1E3A8A" />
+            <Text style={[styles.chatLoaderText, { color: subtitleColor }]}>Cargando mensajes...</Text>
+          </View>
+        ) : chats.length === 0 ? (
+          <View style={[styles.chatEmptyCard, { backgroundColor: theme === 'light' ? '#F8FAFC' : '#0F172A' }]}> 
+            <Text style={[styles.chatEmptyTitle, { color: textColor }]}>Sin conversaciones</Text>
+            <Text style={[styles.chatEmptySubtitle, { color: subtitleColor }]}>Cuando escribas a un propietario, tu conversación aparecerá aquí.</Text>
+          </View>
+        ) : (
+          chats.map((chat) => (
+            <TouchableOpacity
+              key={chat.id}
+              style={[styles.chatCard, { backgroundColor: !chat.is_read_by_tenant ? '#0F766E' : (theme === 'light' ? '#F8FAFC' : '#0F172A') }]}
+              activeOpacity={0.85}
+              onPress={() => navigation.getParent()?.navigate('TenantChatDetail', { chat })}
+            >
+              <View style={styles.chatTopRow}>
+                <Text style={[styles.chatContact, { color: !chat.is_read_by_tenant ? '#FFFFFF' : textColor }]}>
+                  {chat.owner_email || 'Propietario'}
+                </Text>
+                {!chat.is_read_by_tenant && (
+                  <View style={styles.unreadBadgeTenant}>
+                    <Text style={styles.unreadBadgeText}>Respuesta</Text>
+                  </View>
+                )}
+                <View style={[styles.chatStatusPill, statusStyle(chat.status)]}>
+                  <Text style={styles.chatStatusText}>{statusLabel(chat.status)}</Text>
+                </View>
+              </View>
+
+              <Text style={[styles.chatListing, { color: !chat.is_read_by_tenant ? '#E2E8F0' : subtitleColor }]}>
+                {chat.listing_title || 'Publicación sin título'}
+              </Text>
+              <Text style={[styles.chatMessage, { color: !chat.is_read_by_tenant ? '#E2E8F0' : textColor, fontWeight: !chat.is_read_by_tenant ? '700' : '400' }]} numberOfLines={2}>
+                {chat.last_message || 'Sin mensajes recientes.'}
+              </Text>
+              <Text style={[styles.chatDate, { color: !chat.is_read_by_tenant ? '#94A3B8' : subtitleColor }]}>Última actividad: {formatDate(chat.last_message_at)}</Text>
+            </TouchableOpacity>
+          ))
+        )}
+      </View>
+    </ScrollView>
+  );
+};
+
+const TenantChatDetailScreen = ({ route }: any) => {
+  const { chat } = route.params as { chat: OwnerChatItem & { owner_email?: string | null } };
+  const { user, theme } = useAuth();
+  const [messages, setMessages] = useState<OwnerChatMessageItem[]>([]);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(true);
+  const [replyText, setReplyText] = useState('');
+  const [isSendingReply, setIsSendingReply] = useState(false);
+  const backgroundColor = theme === 'light' ? '#F8FAFC' : '#0F172A';
+  const cardColor = theme === 'light' ? '#FFFFFF' : '#111827';
+  const textColor = theme === 'light' ? '#0F172A' : '#F8FAFC';
+  const subtitleColor = theme === 'light' ? '#64748B' : '#CBD5E1';
+
+  const fetchMessages = useCallback(async () => {
+    setIsLoadingMessages(true);
+    const { data, error } = await supabase
+      .from('owner_chat_messages')
+      .select('id, chat_id, sender_role, sender_email, message, created_at')
+      .eq('chat_id', chat.id)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.warn('fetch tenant chat messages error', error.message);
+      setMessages([]);
+      setIsLoadingMessages(false);
+      return;
+    }
+
+    setMessages((data || []) as OwnerChatMessageItem[]);
+    setIsLoadingMessages(false);
+  }, [chat.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchMessages();
+      supabase
+        .from('owner_chats')
+        .update({ is_read_by_tenant: true })
+        .eq('id', chat.id)
+        .then(() => {
+          return;
+        });
+    }, [chat.id, fetchMessages])
+  );
+
+  const handleSendReply = async () => {
+    const trimmedReply = replyText.trim();
+    if (!trimmedReply) {
+      Alert.alert('Mensaje requerido', 'Escribe un mensaje para el propietario.');
+      return;
+    }
+
+    if (!user?.email) {
+      Alert.alert('Error', 'No se encontró tu sesión actual.');
+      return;
+    }
+
+    setIsSendingReply(true);
+    const nowIso = new Date().toISOString();
+    const senderEmail = user.email.trim().toLowerCase();
+
+    const { error: insertMessageError } = await supabase.from('owner_chat_messages').insert({
+      chat_id: chat.id,
+      sender_role: 'tenant',
+      sender_email: senderEmail,
+      message: trimmedReply,
+      created_at: nowIso,
+    });
+
+    if (insertMessageError) {
+      Alert.alert('Error', `No se pudo enviar el mensaje. Detalle: ${insertMessageError.message}`);
+      setIsSendingReply(false);
+      return;
+    }
+
+    const { error: updateChatError } = await supabase
+      .from('owner_chats')
+      .update({
+        last_message: trimmedReply,
+        last_message_at: nowIso,
+        status: 'pendiente',
+        is_read_by_tenant: false,
+      })
+      .eq('id', chat.id);
+
+    if (updateChatError) {
+      Alert.alert('Atención', `Se envió el mensaje pero no se pudo actualizar el resumen. Detalle: ${updateChatError.message}`);
+    }
+
+    setReplyText('');
+    await fetchMessages();
+    setIsSendingReply(false);
+  };
+
+  const historyToRender = messages.length
+    ? messages
+    : chat.last_message
+      ? [{
+          id: 0,
+          chat_id: chat.id,
+          sender_role: 'owner' as const,
+          sender_email: chat.owner_email || null,
+          message: chat.last_message,
+          created_at: chat.last_message_at || new Date().toISOString(),
+        }]
+      : [];
+
+  return (
+    <ScrollView contentContainerStyle={[styles.ownerChatDetailContainer, { backgroundColor }]}> 
+      <View style={[styles.ownerChatDetailCard, { backgroundColor: cardColor }]}> 
+        <Text style={[styles.ownerChatDetailTitle, { color: textColor }]}>{chat.owner_email || 'Propietario'}</Text>
+        <Text style={[styles.ownerChatDetailSubtitle, { color: subtitleColor }]}>{chat.listing_title || 'Publicación sin título'}</Text>
+
+        {isLoadingMessages ? (
+          <View style={styles.chatLoaderWrap}>
+            <ActivityIndicator size="small" color="#1E3A8A" />
+            <Text style={[styles.chatLoaderText, { color: subtitleColor }]}>Cargando conversación...</Text>
+          </View>
+        ) : historyToRender.length === 0 ? (
+          <View style={[styles.chatEmptyCard, { backgroundColor: theme === 'light' ? '#F8FAFC' : '#0F172A' }]}> 
+            <Text style={[styles.chatEmptyTitle, { color: textColor }]}>Sin mensajes</Text>
+            <Text style={[styles.chatEmptySubtitle, { color: subtitleColor }]}>Inicia la conversación escribiendo al propietario.</Text>
+          </View>
+        ) : (
+          <View style={styles.ownerMessagesWrap}>
+            {historyToRender.map((message) => {
+              const isTenant = message.sender_role === 'tenant';
+              return (
+                <View
+                  key={`${message.id}-${message.created_at}`}
+                  style={[
+                    styles.ownerMessageBubble,
+                    isTenant ? styles.ownerMessageBubbleOwner : styles.ownerMessageBubbleTenant,
+                  ]}
+                >
+                  <Text style={styles.ownerMessageSender}>{isTenant ? 'Tú' : 'Propietario'}</Text>
+                  <Text style={styles.ownerMessageText}>{message.message}</Text>
+                  <Text style={styles.ownerMessageDate}>{new Date(message.created_at).toLocaleString()}</Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        <TextInput
+          value={replyText}
+          onChangeText={setReplyText}
+          placeholder="Escribe un mensaje para el propietario"
+          placeholderTextColor={theme === 'light' ? '#94A3B8' : '#64748B'}
+          multiline
+          numberOfLines={4}
+          textAlignVertical="top"
+          style={[
+            styles.messageInput,
+            {
+              color: textColor,
+              borderColor: theme === 'light' ? '#CBD5E1' : '#334155',
+              backgroundColor: theme === 'light' ? '#F8FAFC' : '#0B1220',
+            },
+          ]}
+        />
+
+        <TouchableOpacity style={[styles.scheduleButton, styles.messageButton]} onPress={handleSendReply} disabled={isSendingReply}>
+          <Text style={styles.scheduleButtonText}>{isSendingReply ? 'Enviando...' : 'Responder al propietario'}</Text>
+        </TouchableOpacity>
+      </View>
+    </ScrollView>
+  );
+};
+
 const HomeScreen = ({ navigation }: any) => {
   const { user, theme } = useAuth();
   const [chats, setChats] = useState<OwnerChatItem[]>([]);
@@ -284,11 +800,12 @@ const HomeScreen = ({ navigation }: any) => {
       return;
     }
 
+    const normalizedOwnerEmail = user.email.trim().toLowerCase();
     setIsLoadingChats(true);
     const { data, error } = await supabase
       .from('owner_chats')
       .select('id, contact_name, contact_email, listing_title, last_message, last_message_at, status')
-      .eq('owner_email', user.email)
+      .eq('owner_email', normalizedOwnerEmail)
       .order('last_message_at', { ascending: false });
 
     if (error) {
@@ -382,24 +899,34 @@ const HomeScreen = ({ navigation }: any) => {
             </View>
           ) : (
             filteredChats.map((chat) => (
-              <View key={chat.id} style={[styles.chatCard, { backgroundColor: theme === 'light' ? '#F8FAFC' : '#0F172A' }]}>
+              <TouchableOpacity
+                key={chat.id}
+                style={[styles.chatCard, { backgroundColor: !chat.is_read_by_owner ? '#1E3A8A' : (theme === 'light' ? '#F8FAFC' : '#0F172A') }]}
+                activeOpacity={0.85}
+                onPress={() => navigation.getParent()?.navigate('OwnerChatDetail', { chat })}
+              >
                 <View style={styles.chatTopRow}>
-                  <Text style={[styles.chatContact, { color: textColor }]}>
+                  <Text style={[styles.chatContact, { color: !chat.is_read_by_owner ? '#FFFFFF' : textColor }]}>
                     {chat.contact_name || chat.contact_email || 'Interesado'}
                   </Text>
+                  {!chat.is_read_by_owner && (
+                    <View style={styles.unreadBadge}>
+                      <Text style={styles.unreadBadgeText}>Nuevo</Text>
+                    </View>
+                  )}
                   <View style={[styles.chatStatusPill, statusStyle(chat.status)]}>
                     <Text style={styles.chatStatusText}>{statusLabel(chat.status)}</Text>
                   </View>
                 </View>
 
-                <Text style={[styles.chatListing, { color: subtitleColor }]}>
+                <Text style={[styles.chatListing, { color: !chat.is_read_by_owner ? '#E2E8F0' : subtitleColor }]}>
                   {chat.listing_title || 'Publicación sin título'}
                 </Text>
-                <Text style={[styles.chatMessage, { color: textColor }]} numberOfLines={2}>
+                <Text style={[styles.chatMessage, { color: !chat.is_read_by_owner ? '#E2E8F0' : textColor, fontWeight: !chat.is_read_by_owner ? '700' : '400' }]} numberOfLines={2}>
                   {chat.last_message || 'Sin mensajes recientes.'}
                 </Text>
-                <Text style={[styles.chatDate, { color: subtitleColor }]}>Última actividad: {formatDate(chat.last_message_at)}</Text>
-              </View>
+                <Text style={[styles.chatDate, { color: !chat.is_read_by_owner ? '#94A3B8' : subtitleColor }]}>Última actividad: {formatDate(chat.last_message_at)}</Text>
+              </TouchableOpacity>
             ))
           )}
         </View>
@@ -708,6 +1235,9 @@ function HomeTabs() {
           if (route.name === 'MisProductos') {
             return <Ionicons name="checkmark-done-circle" size={size} color={color} />;
           }
+          if (route.name === 'MisMensajes') {
+            return <Ionicons name="chatbubbles" size={size} color={color} />;
+          }
           return <Ionicons name="person" size={size} color={color} />;
         },
       })}
@@ -743,6 +1273,13 @@ function HomeTabs() {
           })}
         />
       )}
+      {user?.role === 'member' && (
+        <Tab.Screen
+          name="MisMensajes"
+          component={TenantChatsScreen}
+          options={{ title: 'Mis Mensajes' }}
+        />
+      )}
       <Tab.Screen name="Perfil" component={ProfileScreen} options={{ title: 'Mi Perfil' }} />
     </Tab.Navigator>
   );
@@ -758,6 +1295,8 @@ export const AppNavigation = () => {
           <Stack.Screen name="HomeTabs" component={HomeTabs} />
           <Stack.Screen name="CreateListing" component={CreateListingScreen} options={{ headerShown: true, title: 'Crear Nuevo' }} />
           <Stack.Screen name="PropertyDetail" component={PropertyDetailScreen} options={{ headerShown: true, title: 'Detalle de Propiedad' }} />
+          <Stack.Screen name="OwnerChatDetail" component={OwnerChatDetailScreen} options={{ headerShown: true, title: 'Conversación' }} />
+          <Stack.Screen name="TenantChatDetail" component={TenantChatDetailScreen} options={{ headerShown: true, title: 'Conversación' }} />
         </>
       ) : (
         <>
@@ -1118,6 +1657,82 @@ const styles = StyleSheet.create({
   chatDate: {
     marginTop: 8,
     fontSize: 12,
+  },
+  unreadBadge: {
+    backgroundColor: '#FCA5A5',
+    borderRadius: 999,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    marginHorizontal: 4,
+  },
+  unreadBadgeTenant: {
+    backgroundColor: '#A7F3D0',
+    borderRadius: 999,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    marginHorizontal: 4,
+  },
+  unreadBadgeText: {
+    color: '#0F172A',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  ownerChatDetailContainer: {
+    flexGrow: 1,
+    padding: 20,
+  },
+  ownerChatDetailCard: {
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  ownerChatDetailTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  ownerChatDetailSubtitle: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  ownerMessagesWrap: {
+    marginTop: 14,
+    marginBottom: 8,
+    gap: 10,
+  },
+  ownerMessageBubble: {
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  ownerMessageBubbleOwner: {
+    backgroundColor: '#1E3A8A',
+    alignSelf: 'flex-end',
+    maxWidth: '88%',
+  },
+  ownerMessageBubbleTenant: {
+    backgroundColor: '#334155',
+    alignSelf: 'flex-start',
+    maxWidth: '88%',
+  },
+  ownerMessageSender: {
+    color: '#E2E8F0',
+    fontSize: 11,
+    fontWeight: '700',
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  ownerMessageText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  ownerMessageDate: {
+    color: '#CBD5E1',
+    marginTop: 6,
+    fontSize: 10,
+    fontWeight: '600',
   },
   profileCard: {
     width: '100%',
