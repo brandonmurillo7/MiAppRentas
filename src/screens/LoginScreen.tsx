@@ -1,28 +1,43 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { View, StyleSheet, Image, Text, KeyboardAvoidingView, Platform, ScrollView, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { CustomInput } from '../components/CustomInput';
 import { CustomButton } from '../components/CustomButton';
+import { useAuth } from '../context/AuthContext';
 
 export const LoginScreen = ({ navigation }: any) => {
-  const [email, setEmail] = useState('');
+  const { signIn, theme, toggleTheme } = useAuth();
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
-  
-  const [emailError, setEmailError] = useState('');
+  const [identifierError, setIdentifierError] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [role, setRole] = useState<'member' | 'seller'>('member');
+
+  const isDark = theme === 'dark';
+  const pageBackground = isDark ? '#0F172A' : '#F1F5F9';
+  const cardBackground = isDark ? '#111827' : '#FFFFFF';
+  const titleColor = isDark ? '#F8FAFC' : '#1E293B';
+  const labelColor = isDark ? '#CBD5E1' : '#334155';
+  const linkColor = isDark ? '#93C5FD' : '#1E3A8A';
+  
 
   const validarFormulario = () => {
     let esValido = true;
     const regexEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const regexPhone = /^\+?\d{8,15}$/;
+    const normalizedIdentifier = identifier.trim();
 
-    if (!email.trim()) {
-      setEmailError('El correo electrónico es obligatorio.');
+    if (!normalizedIdentifier) {
+      setIdentifierError('El correo o teléfono es obligatorio.');
       esValido = false;
-    } else if (!regexEmail.test(email)) {
-      setEmailError('Favor introduce un correo válido.');
+    } else if (normalizedIdentifier.includes('@') && !regexEmail.test(normalizedIdentifier)) {
+      setIdentifierError('Favor introduce un correo válido.');
+      esValido = false;
+    } else if (!normalizedIdentifier.includes('@') && !regexPhone.test(normalizedIdentifier)) {
+      setIdentifierError('Ingresa un teléfono válido con código de área. Ejemplo: +50498765432');
       esValido = false;
     } else {
-      setEmailError('');
+      setIdentifierError('');
     }
 
     if (!password) {
@@ -38,63 +53,80 @@ export const LoginScreen = ({ navigation }: any) => {
     return esValido;
   };
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     if (validarFormulario()) {
-      // Si pasa las validaciones, pasa a (Home/Tabs)
-      navigation.replace('HomeTabs', { role });
+      const ok = await signIn(identifier, password);
+      if (ok) {
+        // Auth state change switches navigator to authenticated stack.
+      } else {
+        setPasswordError('Credenciales inválidas o error de servidor.');
+      }
     }
   };
 
   return (
-    <KeyboardAvoidingView 
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
-      style={styles.container}
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={[styles.container, { backgroundColor: pageBackground }]}
     >
       <ScrollView contentContainerStyle={styles.scrollContainer}>
-        {/* REQUISITO: Imagen local renderizada correctamente */}
-        <Image
-          source={require('../../assets/inmobiliaria-granada-granatte-71.jpg')}
-          style={styles.headerImage}
-          resizeMode="cover"
-        />
-
-        <Text style={styles.title}>Bienvenido a Rentas de Honduras</Text>
-        <Text style={styles.subtitle}>¡Tu siguiente hogar puede estar aquí!</Text>
-
-        <Text style={styles.roleLabel}>Selecciona tu rol</Text>
-        <View style={styles.roleRow}>
-          <TouchableOpacity
-            style={[styles.roleOption, role === 'member' && styles.roleSelected]}
-            onPress={() => setRole('member')}
-          >
-            <Text style={[styles.roleText, role === 'member' && styles.roleTextSelected]}>Member</Text>
+        <View style={[styles.contentCard, { backgroundColor: cardBackground }]}> 
+          <TouchableOpacity style={styles.themeToggleTop} onPress={toggleTheme}>
+            <Ionicons name={isDark ? 'sunny' : 'moon'} size={16} color="#FFFFFF" />
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.roleOption, role === 'seller' && styles.roleSelected]}
-            onPress={() => setRole('seller')}
-          >
-            <Text style={[styles.roleText, role === 'seller' && styles.roleTextSelected]}>Seller</Text>
-          </TouchableOpacity>
+
+          <Image
+            source={require('../../assets/inmobiliaria-granada-granatte-71.jpg')}
+            style={styles.headerImage}
+            resizeMode="cover"
+          />
+
+          <Text style={[styles.title, { color: titleColor }]}>Rentas de Honduras</Text>
+          <View style={[styles.loginLogoBadge, { backgroundColor: isDark ? '#334155' : '#1E3A8A' }]}>
+            <Text style={styles.loginLogoText}>RH</Text>
+          </View>
+
+          <Text style={[styles.roleLabel, { color: labelColor }]}>Selecciona tu rol</Text>
+          <View style={styles.roleRow}>
+            <TouchableOpacity
+              style={[styles.roleOption, role === 'member' && styles.roleSelected]}
+              onPress={() => setRole('member')}
+            >
+              <Text style={[styles.roleText, role === 'member' && styles.roleTextSelected]}>Inquilino</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.roleOption, role === 'seller' && styles.roleSelected]}
+              onPress={() => setRole('seller')}
+            >
+              <Text style={[styles.roleText, role === 'seller' && styles.roleTextSelected]}>Propietario</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.formSection}>
+            <CustomInput
+              placeholder="Correo o Teléfono"
+              value={identifier}
+              onChangeText={(text) => { setIdentifier(text); setIdentifierError(''); }}
+              error={identifierError}
+              keyboardType="email-address"
+            />
+
+            <CustomInput
+              placeholder="Contraseña"
+              value={password}
+              onChangeText={(text) => { setPassword(text); setPasswordError(''); }}
+              error={passwordError}
+              secureTextEntry={true}
+            />
+
+            <View style={styles.buttonWrapper}>
+              <CustomButton title="Iniciar Sesión" onPress={handleLogin} />
+            </View>
+            <TouchableOpacity style={styles.registerLinkContainer} onPress={() => navigation.navigate('Register')}>
+              <Text style={[styles.registerLinkText, { color: linkColor }]}>¿No tienes cuenta? Registrate aqui</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-
-        {/* Formulario con validaciones en tiempo de ejecución */}
-        <CustomInput
-          placeholder="Correo Electrónico"
-          value={email}
-          onChangeText={(text) => { setEmail(text); setEmailError(''); }}
-          error={emailError}
-          keyboardType="email-address"
-        />
-
-        <CustomInput
-          placeholder="Contraseña"
-          value={password}
-          onChangeText={(text) => { setPassword(text); setPasswordError(''); }}
-          error={passwordError}
-          secureTextEntry={true}
-        />
-
-        <CustomButton title="Iniciar Sesión" onPress={handleLogin} />
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -103,31 +135,67 @@ export const LoginScreen = ({ navigation }: any) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F1F5F9',
   },
   scrollContainer: {
     flexGrow: 1,
-    justifyContent: 'flex-start',
-    alignItems: 'center',     
-    paddingHorizontal: 25,
-    paddingTop: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 30,
+  },
+  contentCard: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 32,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 6,
+    position: 'relative',
+  },
+  themeToggleTop: {
+    position: 'absolute',
+    right: 14,
+    top: 14,
+    zIndex: 1,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#1E3A8A',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   headerImage: {
     width: '100%',
     height: 240,
-    borderRadius: 20,
-    marginBottom: 20,
+    borderRadius: 22,
+    marginBottom: 22,
   },
   title: {
     fontSize: 28,
     fontWeight: 'bold',
     color: '#1E293B',
-    marginBottom: 5,
+    marginBottom: 8,
+    textAlign: 'center',
   },
-  subtitle: {
+  loginLogoBadge: {
+    alignSelf: 'center',
+    minWidth: 62,
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    marginBottom: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loginLogoText: {
+    color: '#FFFFFF',
     fontSize: 16,
-    color: '#64748B',
-    marginBottom: 20,
+    fontWeight: '800',
+    letterSpacing: 2,
   },
   roleLabel: {
     width: '100%',
@@ -141,13 +209,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     width: '100%',
     justifyContent: 'space-between',
-    marginBottom: 20,
+    marginBottom: 24,
   },
   roleOption: {
     flex: 1,
-    paddingVertical: 12,
+    paddingVertical: 14,
     marginHorizontal: 5,
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: '#CBD5E1',
     backgroundColor: '#F8FAFC',
@@ -164,5 +232,22 @@ const styles = StyleSheet.create({
   },
   roleTextSelected: {
     color: '#FFFFFF',
+  },
+  formSection: {
+    width: '100%',
+  },
+  buttonWrapper: {
+    width: '100%',
+    marginTop: 20,
+  },
+  registerLinkContainer: {
+    marginTop: 14,
+    alignItems: 'center',
+  },
+  registerLinkText: {
+    fontSize: 13,
+    color: '#1E3A8A',
+    textAlign: 'center',
+    fontWeight: '600',
   },
 });
